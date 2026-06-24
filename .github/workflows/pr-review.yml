@@ -1,1 +1,85 @@
-#yml file
+name: AI PR Reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Fetch PR Diff
+        id: get_diff
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          DIFF=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3.diff" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER})
+          
+          # Save diff to file (avoids issues with special characters)
+          echo "$DIFF" > diff.txt
+          echo "Diff saved"
+
+      - name: Send Diff to Gemini
+        id: gemini_review
+        run: |
+          DIFF_CONTENT=$(cat diff.txt)
+          
+          # Build the JSON payload
+          cat > payload.json << 'EOF_MARKER'
+          {
+            "contents": [{
+              "parts": [{
+                "text": "You are a code reviewer. Summarise this code change in exactly 3 bullet points. Be concise and focus on what changed and why it matters.\n\nDIFF:\nDIFF_PLACEHOLDER"
+              }]
+            }]
+          }
+          EOF_MARKER
+          
+          # Insert the diff into payload
+          ESCAPED_DIFF=$(cat diff.txt | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" | sed 's/^"//;s/"$//')
+          python3 -c "
+          import json
+          with open('payload.json') as f:
+              payload = json.load(f)
+          payload['contents'][0]['parts'][0]['text'] = payload['contents'][0]['parts'][0]['text'].replace('DIFF_PLACEHOLDER', '''$ESCAPED_DIFF''')
+          with open('payload.json', 'w') as f:
+              json.dump(payload, f)
+          "
+          
+          # Call Gemini API
+          RESPONSE=$(curl -s \
+            -H "Content-Type: application/json" \
+            -d @payload.json \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}")
+          
+          echo "$RESPONSE" > response.json
+          echo "Gemini response saved"
+
+      - name: Post Comment on PR
+        run: |
+          # Extract text from Gemini response
+          REVIEW=$(python3 -c "
+          import json
+          with open('response.json') as f:
+              data = json.load(f)
+          text = data['candidates'][0]['content']['parts'][0]['text']
+          print(text)
+          ")
+          
+          PR_NUMBER=${{ github.event.pull_request.number }}
+
+          # Build comment body
+          COMMENT="##  AI PR Review\n\n$REVIEW\n\n---\n*Powered by Gemini AI*"
+          
+          # Post comment
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"body\": \"$(echo "$COMMENT" | sed 's/"/\\"/g')\"}" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments
