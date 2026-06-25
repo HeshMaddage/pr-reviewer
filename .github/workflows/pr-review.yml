@@ -62,24 +62,40 @@ jobs:
           echo "Gemini response saved"
 
       - name: Post Comment on PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Extract text from Gemini response
-          REVIEW=$(python3 -c "
-          import json
-          with open('response.json') as f:
-              data = json.load(f)
-          text = data['candidates'][0]['content']['parts'][0]['text']
-          print(text)
-          ")
-          
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          python3 << 'EOF'
+          import json, urllib.request, os
 
-          # Build comment body
-          COMMENT="##  AI PR Review\n\n$REVIEW\n\n---\n*Powered by Gemini AI*"
-          
-          # Post comment
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"body\": \"$(echo "$COMMENT" | sed 's/"/\\"/g')\"}" \
-            https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments
+          with open("review.txt") as f:
+              review = f.read()
+
+          comment_body = f"## 🤖 AI PR Review\n\n{review}\n\n---\n*Powered by Gemini 2.5 Flash*"
+
+          payload = {"body": comment_body}
+
+          # Read secrets safely from environment variables
+          token = os.environ["GITHUB_TOKEN"]
+          repo = os.environ["REPO"]
+          pr_number = os.environ["PR_NUMBER"]
+
+          url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+                  "Accept": "application/vnd.github+json"
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(req) as resp:
+              result = json.load(resp)
+              print(f"Comment posted: {result['html_url']}")
+          EOF
