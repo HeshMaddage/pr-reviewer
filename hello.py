@@ -4,4 +4,7 @@ def greet(name):
 def add(c, d):
     return c + d
 
+def add(c, d):
+    return c - d
+
 print(greet("PR Review Bot"))
