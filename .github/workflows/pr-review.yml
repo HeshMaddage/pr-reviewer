@@ -19,91 +19,51 @@ jobs:
             -H "Accept: application/vnd.github.v3.diff" \
             https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
             -o diff.txt
-          echo "Diff fetched. Size: $(wc -c < diff.txt) bytes"
+          echo "Diff size: $(wc -c < diff.txt) bytes"
 
-      - name: Send Diff to Gemini 2.5 Flash
+      - name: Send Diff to Gemini and Post Comment
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python3 << 'EOF'
-          import json, urllib.request, os
-
-          with open("diff.txt") as f:
-              diff = f.read()
-
-          if len(diff) > 10000:
-              diff = diff[:10000] + "\n\n[...diff truncated...]"
-
-          prompt = f"""You are a helpful code reviewer. Analyse this pull request diff and provide:
-- A short 1-line summary of what changed
-- Exactly 3 bullet points explaining the key changes
-- 1 potential concern or suggestion (if any)
-
-DIFF:
-{diff}
-"""
-
-          payload = {
-              "contents": [{
-                  "parts": [{"text": prompt}]
-              }]
-          }
-
-          api_key = os.environ["GEMINI_API_KEY"]
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-
-          req = urllib.request.Request(
-              url,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST"
-          )
-
-          with urllib.request.urlopen(req) as resp:
-              data = json.load(resp)
-
-          review = data["candidates"][0]["content"]["parts"][0]["text"]
-
-          with open("review.txt", "w") as f:
-              f.write(review)
-
-          print("Gemini review saved to review.txt")
-          EOF
-
-      - name: Post Comment on PR
-        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python3 << 'EOF'
+          python3 -c "
           import json, urllib.request, os
 
-          with open("review.txt") as f:
-              review = f.read()
+          # Read diff
+          with open('diff.txt') as f:
+              diff = f.read()
 
-          comment_body = f"## 🤖 AI PR Review\n\n{review}\n\n---\n*Powered by Gemini 2.5 Flash*"
+          if len(diff) > 8000:
+              diff = diff[:8000] + '\n\n[...truncated...]'
 
-          payload = {"body": comment_body}
+          prompt = 'You are a code reviewer. Analyse this PR diff and give: 1) A one-line summary 2) Three bullet points of key changes 3) One suggestion.\n\nDIFF:\n' + diff
 
-          token = os.environ["GITHUB_TOKEN"]
-          repo = os.environ["REPO"]
-          pr_number = os.environ["PR_NUMBER"]
+          payload = json.dumps({'contents': [{'parts': [{'text': prompt}]}]})
 
-          url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+          api_key = os.environ['GEMINI_API_KEY']
+          url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + api_key
 
-          req = urllib.request.Request(
-              url,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Content-Type": "application/json",
-                  "Accept": "application/vnd.github+json"
-              },
-              method="POST"
-          )
+          req = urllib.request.Request(url, data=payload.encode('utf-8'), headers={'Content-Type': 'application/json'}, method='POST')
 
           with urllib.request.urlopen(req) as resp:
-              result = json.load(resp)
-              print(f"Comment posted: {result['html_url']}")
-          EOF
+              data = json.load(resp)
+
+          review = data['candidates'][0]['content']['parts'][0]['text']
+
+          comment = '## Robot AI PR Review\n\n' + review + '\n\n---\n*Powered by Gemini 2.5 Flash*'
+
+          token = os.environ['GITHUB_TOKEN']
+          repo = os.environ['REPO']
+          pr = os.environ['PR_NUMBER']
+
+          url2 = 'https://api.github.com/repos/' + repo + '/issues/' + pr + '/comments'
+          body = json.dumps({'body': comment})
+
+          req2 = urllib.request.Request(url2, data=body.encode('utf-8'), headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json'}, method='POST')
+
+          with urllib.request.urlopen(req2) as resp2:
+              result = json.load(resp2)
+              print('Comment posted: ' + result['html_url'])
+          "
