@@ -52,7 +52,7 @@ jobs:
 
           review = data['candidates'][0]['content']['parts'][0]['text']
 
-          comment = '## Robot AI PR Review\n\n' + review + '\n\n---\n*Powered by Gemini 2.5 Flash*'
+          comment = '## AI PR Reviewer \n\n> *Automatically generated on every PR*\n\n'
 
           token = os.environ['GITHUB_TOKEN']
           repo = os.environ['REPO']
